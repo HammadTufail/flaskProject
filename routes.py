@@ -31,8 +31,7 @@ def allowed_file(filename):
 
 @app.route('/', methods=['GET'])
 def hello():
-    return jsonify({"intro":"hello"}), 201
-
+    return jsonify({"hello"}), 201
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()

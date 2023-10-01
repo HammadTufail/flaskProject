@@ -51,5 +51,10 @@ class Route(db.Model):
     distance = db.Column(db.Float, nullable=False)
     carbon_footprint_saved = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    actual_route_points = db.Column(db.Text, nullable=True)  # Stores encoded polyline after journey completion
+    points_awarded = db.Column(db.Integer, default=0)  # Points to award the user after journey completion
+    estimated_route_points = db.Column(db.Text, nullable=True)  # To store the encoded polyline string
+    start_point = db.Column(db.String(255), nullable=True)
+    end_point = db.Column(db.String(255), nullable=True)
 
 User.routes = db.relationship('Route', back_populates='user', lazy='dynamic')

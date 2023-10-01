@@ -1,17 +1,18 @@
-from flask import request, jsonify
 from werkzeug.utils import secure_filename
-from flask_jwt_extended import jwt_required, create_access_token, get_jwt_identity
-from app import app, db
-from models import User, Event, Address
+from flask_jwt_extended import create_access_token, get_jwt_identity
+from models import Event, Address
 from serializers import UserSchema, EventSchema, AddressSchema
 import os
-import os
 import requests
-from flask import jsonify, request
 from app import app, db
 from models import User, Route
 from flask_jwt_extended import jwt_required
 import polyline
+from shapely.geometry import LineString
+from flask import request, jsonify
+from math import radians, sin, cos, sqrt, atan2
+from serializers import RouteSchema
+
 
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
@@ -114,10 +115,7 @@ EMISSION_FACTORS = {
     "transit": 0.068,  # kg CO2e per passenger-kilometer
     "bicycling": 0.0,  # kg CO2e per kilometer
     "walking": 0.0,  # kg CO2e per kilometer
-    # Add emission factors for other modes
 }
-
-import polyline
 
 
 @app.route('/create_route', methods=['POST'])
@@ -127,6 +125,8 @@ def create_route():
     end_location = data.get('end_location')
 
     all_routes = {}
+    max_co2_emissions = 0  # Keep track of the maximum CO2 emissions
+
     for mode in TRANSPORT_MODES:
         response = requests.get(
             'https://maps.googleapis.com/maps/api/directions/json',
@@ -146,20 +146,119 @@ def create_route():
                     distance = route['legs'][0]['distance']['value'] / 1000.0  # Convert to km
                     co2_emissions = distance * EMISSION_FACTORS.get(mode, 0.0)
 
+                    # Update maximum CO2 emissions if current emission is greater
+                    if co2_emissions > max_co2_emissions:
+                        max_co2_emissions = co2_emissions
+
                     encoded_polyline = route.get("overview_polyline", {}).get("points", "")
-                    # Decode the polyline to get the list of coordinates
                     decoded_polyline = polyline.decode(encoded_polyline) if encoded_polyline else []
 
                     top_routes.append({
+                        "start_location": route['legs'][0]['start_location'],
                         "distance": distance,
                         "carbon_emissions": co2_emissions,
-                        "overview_polyline": decoded_polyline,
-                        # Add other relevant info
+                        "encoded_overview_polyline": encoded_polyline,
+                        "end_location": route['legs'][0]['end_location'],
                     })
 
                 all_routes[mode] = top_routes
 
-    return jsonify({"message": "Routes fetched", "routes": all_routes}), 200
+    # Calculating CO2 saved for each route
+    for mode, routes in all_routes.items():
+        for route in routes:
+            route["co2_saved"] = max_co2_emissions - route["carbon_emissions"]  # Calculate CO2 saved
+
+    return jsonify({"message": "Routes fetched", "routes": all_routes, "max":max_co2_emissions}), 200
+
+
+@app.route('/save_route', methods=['POST'])
+@jwt_required()
+def save_route():
+    user_id = get_jwt_identity()['user_id']
+    user = User.query.get_or_404(user_id)
+
+    data = request.get_json()
+    mode_of_transportation = data.get('mode_of_transportation')
+    estimated_route_points = data.get('estimated_route_points') #encoded polyline string
+    carbon_footprint_saved = data.get('carbon_emissions_saved')
+    distance = data.get('distance')
+    route = Route(
+        user=user,
+        mode_of_transportation=mode_of_transportation,
+        estimated_route_points=estimated_route_points,
+        carbon_footprint_saved=carbon_footprint_saved,
+        distance=distance,
+        start_point=data.get('start_location'),
+        end_point=data.get('end_location'),
+    )
+    db.session.add(route)
+    db.session.commit()
+
+    return jsonify({"message": "Route saved", "route_id": route.id}), 200
+
+
+
+
+@app.route('/complete_route/<int:route_id>', methods=['POST'])
+@jwt_required()
+def complete_route(route_id):
+    route = Route.query.get_or_404(route_id)
+
+    data = request.get_json()
+    actual_route_points = data.get('actual_route_points')  # Assuming this is an encoded polyline string
+
+    estimated_line = LineString(polyline.decode(route.estimated_route_points))
+    actual_line = LineString(polyline.decode(actual_route_points))
+
+    intersection = estimated_line.intersection(actual_line)
+    match_percentage = (intersection.length / estimated_line.length) * 100
+
+    if match_percentage >= 70:  # Or your desired threshold
+        route.points_awarded = route.carbon_footprint_saved  # Award the user the carbon saved as the points.
+        route.actual_route_points = actual_route_points
+        user = route.user
+        user.points += route.points_awarded  # Update user’s total points
+        db.session.commit()
+
+        return jsonify({"message": "Journey completed", "points_awarded": route.points_awarded}), 200
+    else:
+        return jsonify({"message": "Journey route didn't match the estimated route"}), 400
+
+
+
+
+
+@app.route('/search_routes', methods=['GET'])
+def search_routes():
+    start_latitude = float(request.args.get('start_latitude'))
+    start_longitude = float(request.args.get('start_longitude'))
+    end_latitude = float(request.args.get('end_latitude'))
+    end_longitude = float(request.args.get('end_longitude'))
+    radius = float(request.args.get('radius', 200))
+    print("Testing"+start_longitude,start_longitude,end_latitude,end_longitude,radius)
+    if not all([start_latitude, start_longitude, end_latitude, end_longitude]):
+        return jsonify({"error": "start_latitude, start_longitude, end_latitude, and end_longitude are required"}), 400
+
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371.0  # Radius of the Earth in km
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = (sin(dlat / 2) ** 2) + cos(radians(lat1)) * cos(radians(lat2)) * (sin(dlon / 2) ** 2)
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return R * c  # Distance in km
+
+    # Filter routes manually
+    routes = []
+    for route in Route.query.all():
+        # Assuming start_point and end_point are stored as "lat,lon"
+        s_lat, s_lon = map(float, route.start_point.split(','))
+        e_lat, e_lon = map(float, route.end_point.split(','))
+
+        if haversine(start_latitude, start_longitude, s_lat, s_lon) <= radius and \
+                haversine(end_latitude, end_longitude, e_lat, e_lon) <= radius:
+            routes.append(route)
+
+    return jsonify({"routes": RouteSchema(many=True).dump(routes)}), 200
 
 
 @app.route('/user_info', methods=['GET'])

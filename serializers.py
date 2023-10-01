@@ -1,5 +1,5 @@
 from flask_marshmallow import Marshmallow
-from models import User, Event, Address
+from models import User, Event, Address, Route
 
 ma = Marshmallow()
 
@@ -19,4 +19,9 @@ class EventSchema(ma.SQLAlchemyAutoSchema):
 class AddressSchema(ma.SQLAlchemyAutoSchema):
     class Meta:
         model = Address
+        load_instance = True
+
+class RouteSchema(ma.SQLAlchemyAutoSchema):
+    class Meta:
+        model = Route
         load_instance = True

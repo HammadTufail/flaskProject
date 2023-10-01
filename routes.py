@@ -25,7 +25,7 @@ UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-GOOGLE_MAPS_API_KEY = "AIzaSyDiO4rSQtabv-kWnToMjUbbnKxAKL2b0-I"
+GOOGLE_MAPS_API_KEY = "api key"
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
